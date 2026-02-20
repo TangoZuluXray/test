@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Morse Keyer 620Hz</title>
+    <style>
+        body { background: #0f0f0f; color: #00ff00; font-family: 'Courier New', monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* UI 패널 */
+        #status-panel {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(0, 20, 0, 0.9); padding: 20px;
+            border: 1px solid #00ff00; border-radius: 4px; box-shadow: 0 0 10px rgba(0,255,0,0.2);
+        }
+        .info { font-size: 14px; margin-bottom: 8px; letter-spacing: 1px; }
+        .val { color: #fff; font-weight: bold; }
+        .indicator {
+            display: inline-block; padding: 4px 12px; font-weight: bold;
+            border-radius: 2px; margin-top: 5px; font-size: 12px;
+        }
+        .rx { background: #003300; color: #00ff00; }
+        .tx { background: #aa0000; color: #fff; box-shadow: 0 0 15px #ff0000; }
+
+        /* 메인 디스플레이 */
+        #display-area { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #output { font-size: 64px; width: 85%; text-align: center; word-wrap: break-word; min-height: 80px; text-shadow: 0 0 10px rgba(0,255,0,0.5); }
+        #buffer { font-size: 32px; color: #555; height: 40px; margin-bottom: 10px; }
+        
+        #footer { padding: 20px; color: #444; font-size: 12px; text-align: center; border-top: 1px solid #222; }
+        kbd { border: 1px solid #444; padding: 1px 4px; border-radius: 3px; color: #888; }
+    </style>
+</head>
+<body onclick="initAudio()">
+
+<div id="status-panel">
+    <div class="info">MODE: <span id="mode-text" class="val">STRAIGHT</span></div>
+    <div class="info">SPEED: <span id="wpm-text" class="val">20</span> WPM</div>
+    <div class="info">TONE: <span class="val">620 Hz</span></div>
+    <div id="state-indicator" class="indicator rx">RX</div>
+</div>
+
+<div id="display-area">
+    <div id="buffer"></div>
+    <div id="output">CLICK SCREEN TO INIT</div>
+</div>
+
+<div id="footer">
+    <kbd>M</kbd> Mode | <kbd>↑</kbd><kbd>↓</kbd> WPM | <kbd>Space</kbd> Straight | <kbd>[</kbd> <kbd>]</kbd> Paddle | <kbd>Back</kbd> Clear
+</div>
+
+<script>
+    let audioCtx = null;
+    let oscillator = null;
+    let gainNode = null;
+
+    // 오디오 초기화 (620Hz 설정)
+    function initAudio() {
+        if (audioCtx) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        gainNode.connect(audioCtx.destination);
+        document.getElementById('output').innerText = "";
+    }
+
+    function startTone() {
+        if (!audioCtx) return;
+        if (oscillator) oscillator.stop();
+        oscillator = audioCtx.createOscillator();
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(620, audioCtx.currentTime); // 620Hz로 변경
+        oscillator.connect(gainNode);
+        oscillator.start();
+        gainNode.gain.setTargetAtTime(0.1, audioCtx.currentTime, 0.005);
+        updateIndicator(true);
+    }
+
+    function stopTone() {
+        if (!gainNode) return;
+        gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.005);
+        updateIndicator(false);
+    }
+
+    function updateIndicator(isTX) {
+        const ind = document.getElementById('state-indicator');
+        ind.innerText = isTX ? "TX" : "RX";
+        ind.className = isTX ? "indicator tx" : "indicator rx";
+    }
+
+    // 로직 상수 및 변수
+    const morseDict = { ".-":"A", "-...":"B", "-.-.":"C", "-..":"D", ".":"E", "..-.":"F", "--.":"G", "....":"H", "..":"I", ".---":"J", "-.-":"K", ".-..":"L", "--":"M", "-.":"N", "---":"O", ".--.":"P", "--.-":"Q", ".-.":"R", "...":"S", "-":"T", "..-":"U", "...-":"V", ".--":"W", "-..-":"X", "-.--":"Y", "--..":"Z", "-----":"0", ".----":"1", "..---":"2", "...--":"3", "....-":"4", ".....":"5", "-....":"6", "--...":"7", "---..":"8", "----.":"9", ".-.-.-":".", "--..--":",", "..--..":"?", "-.-.--":"!" };
+
+    let mode = 'straight';
+    let wpm = 20;
+    let unit = 1200 / wpm;
+    let currentSeq = "";
+    let decodedText = "";
+    let lastUpTime = Date.now();
+    let isKeyDown = false;
+    let paddleTimer = null;
+
+    const outDiv = document.getElementById('output');
+    const bufDiv = document.getElementById('buffer');
+
+    // 입력 처리
+    function handleSymbol(s) {
+        currentSeq += s;
+        bufDiv.innerText = currentSeq;
+        lastUpTime = Date.now();
+    }
+
+    function decode() {
+        if (currentSeq === "") return;
+        decodedText += (morseDict[currentSeq] || "?");
+        outDiv.innerText = decodedText;
+        currentSeq = "";
+        bufDiv.innerText = "";
+    }
+
+    // 키보드 이벤트
+    window.addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+        initAudio();
+
+        if (e.key.toLowerCase() === 'm') {
+            mode = (mode === 'straight' ? 'paddle' : 'straight');
+            document.getElementById('mode-text').innerText = mode.toUpperCase();
+            return;
+        }
+        if (e.key === 'ArrowUp') { wpm = Math.min(60, wpm+1); updateWPM(); return; }
+        if (e.key === 'ArrowDown') { wpm = Math.max(5, wpm-1); updateWPM(); return; }
+        if (e.key === 'Backspace') { decodedText = ""; outDiv.innerText = ""; return; }
+
+        if (mode === 'straight' && e.code === 'Space') {
+            isKeyDown = true;
+            this.downStart = Date.now();
+            startTone();
+        }
+
+        if (mode === 'paddle' && !paddleTimer) {
+            if (e.key === '[' || e.key === ']') {
+                const sym = (e.key === '[') ? '.' : '-';
+                const len = (sym === '.') ? unit : unit * 3;
+                const loop = () => {
+                    startTone();
+                    handleSymbol(sym);
+                    setTimeout(() => { 
+                        stopTone(); 
+                    }, len);
+                };
+                loop();
+                paddleTimer = setInterval(loop, len + unit);
+            }
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        if (mode === 'straight' && e.code === 'Space') {
+            const dur = Date.now() - this.downStart;
+            handleSymbol(dur < unit * 2.5 ? '.' : '-');
+            stopTone();
+            isKeyDown = false;
+        }
+        if (mode === 'paddle' && (e.key === '[' || e.key === ']')) {
+            clearInterval(paddleTimer);
+            paddleTimer = null;
+        }
+    });
+
+    function updateWPM() {
+        unit = 1200 / wpm;
+        document.getElementById('wpm-text').innerText = wpm;
+    }
+
+    // 자동 해독/공백 루프
+    setInterval(() => {
+        const now = Date.now();
+        if (!isKeyDown && !paddleTimer && currentSeq !== "") {
+            if (now - lastUpTime > unit * 3) decode();
+        }
+        if (!isKeyDown && !paddleTimer && decodedText !== "" && !decodedText.endsWith(" ")) {
+            if (now - lastUpTime > unit * 7) {
+                decodedText += " ";
+                outDiv.innerText = decodedText;
+            }
+        }
+    }, 50);
+
+</script>
+</body>
+</html>
